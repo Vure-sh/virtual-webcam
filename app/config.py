@@ -160,6 +160,9 @@ class AppConfig:
     use_mock_camera: bool = False
     loop_playback: bool = True
     live_preview_enabled: bool = True
+    flip_horizontal: bool = False
+    audio_enabled: bool = True
+    volume: int = 100
 
     def __post_init__(self) -> None:
         """Coerce and validate fields upon initialization."""
@@ -172,6 +175,7 @@ class AppConfig:
         ):
             self.fps_preset = FPSPreset.from_string(self.fps_preset)
         self.validate()
+
 
     def validate(self) -> None:
         """Validate configuration values, raising ValueError on invalid entries."""

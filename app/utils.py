@@ -84,18 +84,20 @@ def transform_frame(
     target_w: int,
     target_h: int,
     out_canvas: Optional[np.ndarray] = None,
+    flip_horizontal: bool = False,
 ) -> np.ndarray:
     """Transform an input frame (BGR/gray) into a letterboxed RGB output frame on canvas.
 
     Converts color space from BGR to RGB, resizes with optimal interpolation
-    (cv2.INTER_AREA for downscaling, cv2.INTER_LINEAR for upscaling), and centers
-    the scaled frame onto a black canvas buffer.
+    (cv2.INTER_AREA for downscaling, cv2.INTER_CUBIC for upscaling), optionally flips horizontally,
+    and centers the scaled frame onto a black canvas buffer.
 
     Args:
         frame_bgr: Input frame (numpy uint8 array with 2 or 3 dimensions).
         target_w: Destination width (> 0).
         target_h: Destination height (> 0).
         out_canvas: Optional preallocated uint8 array of shape (target_h, target_w, 3) for zero-copy reuse.
+        flip_horizontal: If True, mirror the frame horizontally.
 
     Returns:
         RGB uint8 numpy array of shape (target_h, target_w, 3).
@@ -139,6 +141,8 @@ def transform_frame(
             interpolation=interpolation,
         )
 
+    if flip_horizontal:
+        scaled_frame = cv2.flip(scaled_frame, 1)
 
     # Canvas buffer management
     if (
@@ -160,6 +164,7 @@ def transform_frame(
 
     canvas[y_start:y_end, x_start:x_end] = scaled_frame
     return canvas
+
 
 
 @dataclass(frozen=True)

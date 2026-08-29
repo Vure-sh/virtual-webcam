@@ -418,6 +418,7 @@ class QuickHelpDialog(QDialog):
             "<tr><td><b>Space</b></td><td>Play / Pause playback</td></tr>"
             "<tr><td><b>S / Esc</b></td><td>Stop playback</td></tr>"
             "<tr><td><b>Ctrl+O</b></td><td>Open video file dialog</td></tr>"
+            "<tr><td><b>M</b></td><td>Toggle horizontal flip / mirror video</td></tr>"
             "<tr><td><b>L</b></td><td>Toggle loop playback</td></tr>"
             "<tr><td><b>P</b></td><td>Toggle live preview rendering</td></tr>"
             "<tr><td><b>C</b></td><td>Start / Stop Virtual Camera</td></tr>"
@@ -431,22 +432,42 @@ class QuickHelpDialog(QDialog):
         l_keys.addStretch(1)
         tabs.addTab(tab_keys, "⌨️ Shortcuts")
 
-        # Tab 4: Discord & Troubleshooting
+        # Tab 4: Audio Streaming to Discord
+        tab_audio = QWidget()
+        l_audio = QVBoxLayout(tab_audio)
+        lbl_audio = QLabel(
+            "<h3>🎙️ How to Stream Audio to Discord / Calls</h3>"
+            "<ol style='line-height: 1.8; font-size: 13px; color: #cbd5e1;'>"
+            "<li><b>Enable Sound:</b> Make sure the <b>🔊 Audio</b> checkbox is checked in the playback bar below.</li>"
+            "<li><b>Create Virtual Mic Sink:</b> Click the <code>🎙️ Setup Virtual Mic</code> button on the right sidebar (or run <code>./setup_virtual_mic.sh</code> in terminal).</li>"
+            "<li><b>Select in Discord:</b> In Discord, go to <b>User Settings (⚙️) → Voice & Video → Input Device (Microphone)</b>.</li>"
+            "<li>Select <b>Virtual_Microphone</b> (or Monitor of Virtual_Microphone). Discord will now stream the video's audio directly into your call!</li>"
+            "</ol>"
+        )
+        lbl_audio.setWordWrap(True)
+        lbl_audio.setTextFormat(Qt.TextFormat.RichText)
+        l_audio.addWidget(lbl_audio)
+        l_audio.addStretch(1)
+        tabs.addTab(tab_audio, "🎙️ Audio Setup")
+
+        # Tab 5: Discord & Troubleshooting
         tab_discord = QWidget()
         l_discord = QVBoxLayout(tab_discord)
         lbl_discord = QLabel(
             "<h3>💬 Discord & App Tips</h3>"
             "<ul style='line-height: 1.7; font-size: 13px; color: #cbd5e1;'>"
+            "<li><b>Mirrored Video:</b> Toggle the <b>🪞 Flip/Mirror</b> checkbox (or press <kbd>M</kbd>) to flip video horizontally. Note that Discord locally mirrors your own camera preview, but other people in the call see the unmirrored stream.</li>"
+            "<li><b>Blurry Video:</b> Set Discord's <b>Video Background</b> to <b>None</b> (Discord's background blur filter blurs non-human video feeds).</li>"
             "<li><b>Discord Camera Detection:</b> Ensure <code>exclusive_caps=1</code> was included in the modprobe command. Restart Discord after loading the kernel module.</li>"
             "<li><b>WebRTC / Browsers:</b> Chrome and Firefox detect <code>VirtualCam</code> automatically in Google Meet, Zoom Web, etc.</li>"
-            "<li><b>Testing without root / v4l2loopback:</b> Start the app with <code>--mock</code> or select Demo Mode in <code>./launch.sh</code> to test without creating kernel devices.</li>"
             "</ul>"
         )
         lbl_discord.setWordWrap(True)
         lbl_discord.setTextFormat(Qt.TextFormat.RichText)
         l_discord.addWidget(lbl_discord)
         l_discord.addStretch(1)
-        tabs.addTab(tab_discord, "💬 Discord & Tips")
+        tabs.addTab(tab_discord, "💬 Discord Tips")
+
 
         layout.addWidget(tabs, stretch=1)
 
@@ -804,7 +825,7 @@ class FileSelectorWidget(QWidget):
 
 
 class PlaybackControlWidget(QWidget):
-    """Playback controls: Play/Pause/Stop, scrubbable seek slider, time label, loop & preview toggles."""
+    """Playback controls: Play/Pause/Stop, scrubbable seek slider, time label, loop, flip, preview, and audio controls."""
 
     play_clicked = Signal()
     pause_clicked = Signal()
@@ -812,6 +833,9 @@ class PlaybackControlWidget(QWidget):
     seek_requested = Signal(int)
     loop_toggled = Signal(bool)
     preview_toggled = Signal(bool)
+    flip_toggled = Signal(bool)
+    audio_toggled = Signal(bool)
+    volume_changed = Signal(int)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -864,20 +888,60 @@ class PlaybackControlWidget(QWidget):
         self.btn_stop.clicked.connect(self._on_stop_clicked)
         controls_layout.addWidget(self.btn_stop)
 
-        controls_layout.addSpacing(16)
+        controls_layout.addSpacing(10)
 
-        self.chk_loop = QCheckBox("🔁 Loop Playback")
+        self.chk_loop = QCheckBox("🔁 Loop")
+        self.chk_loop.setToolTip("Loop playback continuously (Hotkey: L)")
         self.chk_loop.setChecked(True)
         self.chk_loop.toggled.connect(self.loop_toggled.emit)
         controls_layout.addWidget(self.chk_loop)
 
-        self.chk_preview = QCheckBox("👁 Live Preview")
+        self.chk_flip = QCheckBox("🪞 Flip/Mirror")
+        self.chk_flip.setToolTip("Mirror video horizontally (Hotkey: M)")
+        self.chk_flip.setChecked(False)
+        self.chk_flip.toggled.connect(self.flip_toggled.emit)
+        controls_layout.addWidget(self.chk_flip)
+
+        self.chk_preview = QCheckBox("👁 Preview")
+        self.chk_preview.setToolTip("Toggle live video preview (Hotkey: P)")
         self.chk_preview.setChecked(True)
         self.chk_preview.toggled.connect(self.preview_toggled.emit)
         controls_layout.addWidget(self.chk_preview)
 
+        controls_layout.addSpacing(10)
+
+        # Audio controls
+        self.chk_audio = QCheckBox("🔊 Sound")
+        self.chk_audio.setToolTip("Enable/Mute audio playback")
+        self.chk_audio.setChecked(True)
+        self.chk_audio.toggled.connect(self._on_audio_toggled)
+        controls_layout.addWidget(self.chk_audio)
+
+        self.slider_volume = ClickableSlider(Qt.Orientation.Horizontal)
+        self.slider_volume.setRange(0, 100)
+        self.slider_volume.setValue(100)
+        self.slider_volume.setMaximumWidth(70)
+        self.slider_volume.setToolTip("Volume: 100%")
+        self.slider_volume.valueChanged.connect(self._on_volume_slider_changed)
+        controls_layout.addWidget(self.slider_volume)
+
+        self.lbl_volume = QLabel("100%")
+        self.lbl_volume.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        controls_layout.addWidget(self.lbl_volume)
+
         controls_layout.addStretch(1)
         main_layout.addLayout(controls_layout)
+
+    def _on_audio_toggled(self, checked: bool) -> None:
+        """Handle audio toggle."""
+        self.slider_volume.setEnabled(checked)
+        self.audio_toggled.emit(checked)
+
+    def _on_volume_slider_changed(self, val: int) -> None:
+        """Handle volume slider change."""
+        self.lbl_volume.setText(f"{val}%")
+        self.slider_volume.setToolTip(f"Volume: {val}%")
+        self.volume_changed.emit(val)
 
     @property
     def play_pause_btn(self) -> QPushButton:
@@ -898,6 +962,21 @@ class PlaybackControlWidget(QWidget):
     def preview_checkbox(self) -> QCheckBox:
         """Alias for chk_preview."""
         return self.chk_preview
+
+    @property
+    def flip_checkbox(self) -> QCheckBox:
+        """Alias for chk_flip."""
+        return self.chk_flip
+
+    @property
+    def audio_checkbox(self) -> QCheckBox:
+        """Alias for chk_audio."""
+        return self.chk_audio
+
+    @property
+    def volume_slider(self) -> ClickableSlider:
+        """Alias for slider_volume."""
+        return self.slider_volume
 
     @property
     def timeline_slider(self) -> ClickableSlider:
@@ -928,6 +1007,7 @@ class PlaybackControlWidget(QWidget):
     def lbl_total_time(self) -> QLabel:
         """Alias for lbl_time."""
         return self.lbl_time
+
 
     def _on_play_pause_clicked(self) -> None:
         """Handle click on Play/Pause toggle button."""
@@ -1034,6 +1114,7 @@ class SettingsWidget(QWidget):
     vcam_toggle_clicked = Signal()
     device_changed = Signal(str)
     refresh_devices_clicked = Signal()
+    setup_virtual_mic_clicked = Signal()
     help_clicked = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -1131,6 +1212,12 @@ class SettingsWidget(QWidget):
         vcam_layout.addLayout(stats_layout)
         main_layout.addWidget(grp_vcam)
 
+        # Virtual Mic & Audio Setup Button
+        self.btn_virtual_mic = QPushButton("🎙️ Setup Virtual Mic for Discord")
+        self.btn_virtual_mic.setToolTip("Create a virtual microphone device so Discord can stream audio from this video (PulseAudio/PipeWire)")
+        self.btn_virtual_mic.clicked.connect(self.setup_virtual_mic_clicked.emit)
+        main_layout.addWidget(self.btn_virtual_mic)
+
         # Quick Help Button
         self.btn_help = QPushButton("❓ Setup & Help Guide")
         self.btn_help.setToolTip("Open setup guide, Linux commands, shortcuts, and Discord tips (Hotkey: F1)")
@@ -1138,6 +1225,7 @@ class SettingsWidget(QWidget):
         main_layout.addWidget(self.btn_help)
 
         main_layout.addStretch(1)
+
 
 
     def _on_resolution_changed(self, index: int) -> None:
@@ -1375,6 +1463,9 @@ class MainWindow(QMainWindow):
         self.playback_controls.stop_clicked.connect(self._on_stop_clicked)
         self.playback_controls.seek_requested.connect(self._controller.seek)
         self.playback_controls.loop_toggled.connect(self._controller.set_loop)
+        self.playback_controls.flip_toggled.connect(self._controller.set_flip_horizontal)
+        self.playback_controls.audio_toggled.connect(self._controller.set_audio_enabled)
+        self.playback_controls.volume_changed.connect(self._controller.set_volume)
         self.playback_controls.preview_toggled.connect(self._on_preview_toggled)
 
         # Settings -> controller
@@ -1382,7 +1473,9 @@ class MainWindow(QMainWindow):
         self.settings_widget.fps_changed.connect(self._on_fps_changed)
         self.settings_widget.vcam_toggle_clicked.connect(self._on_vcam_toggle_clicked)
         self.settings_widget.refresh_devices_clicked.connect(self.refresh_devices)
+        self.settings_widget.setup_virtual_mic_clicked.connect(self._on_setup_virtual_mic)
         self.settings_widget.help_clicked.connect(self.show_help_dialog)
+
 
 
         # Controller -> UI
@@ -1565,6 +1658,32 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, title, message)
 
     @Slot()
+    def _on_setup_virtual_mic(self) -> None:
+        """Create virtual microphone audio sink for Discord streaming."""
+        import subprocess
+
+        try:
+            subprocess.run(
+                [
+                    "pactl",
+                    "load-module",
+                    "module-null-sink",
+                    "sink_name=VirtualMic",
+                    "sink_properties=device.description=Virtual_Microphone",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.status_bar.showMessage(
+                "✓ Virtual Microphone sink ready! In Discord, select 'Virtual_Microphone' as your Input Device.",
+                10000,
+            )
+            self.show_help_dialog()
+        except Exception as e:
+            self.show_error("VirtualMicError", f"Failed to run pactl: {e}")
+
+    @Slot()
     def show_help_dialog(self) -> None:
         """Open interactive setup and help guide dialog."""
         dialog = QuickHelpDialog(self)
@@ -1583,6 +1702,11 @@ class MainWindow(QMainWindow):
             event.accept()
         elif key in (Qt.Key.Key_S, Qt.Key.Key_Escape):
             self._on_stop_clicked()
+            event.accept()
+        elif key == Qt.Key.Key_M and not (mods & Qt.KeyboardModifier.ControlModifier):
+            new_val = not self.playback_controls.chk_flip.isChecked()
+            self.playback_controls.chk_flip.setChecked(new_val)
+            self._controller.set_flip_horizontal(new_val)
             event.accept()
         elif key == Qt.Key.Key_L and not (mods & Qt.KeyboardModifier.ControlModifier):
             new_val = not self.playback_controls.chk_loop.isChecked()
@@ -1620,6 +1744,7 @@ class MainWindow(QMainWindow):
         elif key == Qt.Key.Key_O and (mods & Qt.KeyboardModifier.ControlModifier):
             self.file_selector._on_browse_clicked()
             event.accept()
+
         else:
             super().keyPressEvent(event)
 

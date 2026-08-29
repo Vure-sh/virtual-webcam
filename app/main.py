@@ -103,9 +103,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=False,
         help="Generate and load an animated test pattern video automatically.",
     )
+    parser.add_argument(
+        "--mirror",
+        "--flip-h",
+        dest="mirror",
+        action="store_true",
+        default=False,
+        help="Mirror/flip video horizontally on startup.",
+    )
+    parser.add_argument(
+        "--no-audio",
+        "--mute",
+        dest="no_audio",
+        action="store_true",
+        default=False,
+        help="Mute/disable audio playback on startup.",
+    )
 
     return parser
-
 
 
 def parse_args_to_config(argv: Optional[List[str]] = None) -> Tuple[AppConfig, argparse.Namespace]:
@@ -128,9 +143,12 @@ def parse_args_to_config(argv: Optional[List[str]] = None) -> Tuple[AppConfig, a
         use_mock_camera=bool(args.mock),
         loop_playback=True,
         live_preview_enabled=True,
+        flip_horizontal=bool(getattr(args, "mirror", False)),
+        audio_enabled=not bool(getattr(args, "no_audio", False)),
     )
 
     return config, args
+
 
 
 def main(argv: Optional[List[str]] = None) -> int:

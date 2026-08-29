@@ -6,13 +6,11 @@ Built with Python, PySide6, OpenCV, and `v4l2loopback`.
 
 ---
 
-## Why?
-
-Discord and WebRTC browsers on Linux don't have an option to feed a local video file as a camera stream. This app handles the video decoding, pacing, and letterboxing, and outputs clean frames into a Linux virtual camera device (`/dev/video*`) that other apps detect as a real webcam.
-
 ## Features
 
 - **Simple UI**: File picker, drag-and-drop, playback controls (Play, Pause, Stop, Seek, Loop), and a live preview.
+- **Mirror / Flip Video**: One-click horizontal flip toggle (`M` key) so text and webcams look unmirrored in Discord.
+- **Audio Streaming**: Built-in sound playback and virtual microphone sink for streaming video audio directly into Discord calls.
 - **Aspect Ratio Safe**: Keeps your video's original aspect ratio without stretching (adds clean letterboxing if needed).
 - **Custom Res & FPS**: Switch output resolution (480p to 1440p) and frame rate on the fly.
 - **Discord Ready**: Pre-configured with the flags Discord/Chromium need to detect the feed.
@@ -71,11 +69,19 @@ pip install -r requirements.txt
 
 ## Using it with Discord
 
-1. Open **Virtual Webcam**, pick a video (or hit **Demo Video**), and click **Start Virtual Camera**.
+### Video
+1. Open **Virtual Webcam**, load a video, and click **Start Virtual Camera**.
 2. Relaunch Discord (or press `Ctrl + R` to refresh).
 3. Head to **Settings → Voice & Video → Video Settings**.
 4. Select **VirtualCam** as your camera.
-5. **Important**: Turn off Discord's **Video Background** (set it to **None**). If blur is turned on, Discord won't detect a human face in the video and will blur the entire stream.
+5. **Mirrored?** Toggle the **🪞 Flip/Mirror** checkbox (or press `M`) in the app. *(Note: Discord's local preview is mirrored by default, but friends in the call see the unmirrored stream).*
+6. **Blurry?** Turn off Discord's **Video Background** (set to **None**).
+
+### Audio (Streaming sound into call)
+1. In the app, click **🎙️ Setup Virtual Mic for Discord** (or run `./setup_virtual_mic.sh`).
+2. In Discord: Go to **Settings → Voice & Video → Input Device (Microphone)**.
+3. Select **Virtual_Microphone** (or *Monitor of Virtual_Microphone*).
+4. Play your video with sound enabled!
 
 ---
 
@@ -83,6 +89,7 @@ pip install -r requirements.txt
 
 - `Space`: Play / Pause
 - `S` or `Esc`: Stop
+- `M`: Toggle horizontal flip / mirror video
 - `Ctrl + O`: Open video file
 - `L`: Toggle loop
 - `P`: Toggle preview
@@ -94,16 +101,16 @@ pip install -r requirements.txt
 
 ## CLI Flags
 
-If you prefer running from the terminal without using the GUI dialogs:
-
 ```bash
-python -m app.main --video path/to/video.mp4 --resolution 1080p --fps 30 --start-vcam --autoplay
+python -m app.main --video path/to/video.mp4 --resolution 1080p --fps 30 --mirror --start-vcam --autoplay
 ```
 
 | Flag | Description |
 |---|---|
 | `-v, --video <file>` | Path to video file |
 | `--demo` | Generate and load a sample test video |
+| `--mirror`, `--flip-h` | Mirror/flip video horizontally |
+| `--no-audio` | Mute audio playback |
 | `-r, --resolution <preset>` | Output resolution (`original`, `480p`, `720p`, `1080p`, `1440p`) |
 | `-f, --fps <preset>` | Output FPS (`source`, `15`, `24`, `30`, `60`) |
 | `-d, --device <dev>` | Device path (default: `/dev/video10`) |

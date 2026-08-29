@@ -21,10 +21,12 @@ from typing import Optional, Tuple, Union
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QCoreApplication, QObject, QThread, Qt, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QObject, QThread, QUrl, Qt, Signal, Slot
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 from app.config import AppConfig, FPSPreset, ResolutionPreset
 from app.utils import VideoMetadata, probe_video_metadata, transform_frame
+
 from app.virtual_camera import (
     DeviceBusyError,
     DeviceNotFoundError,
@@ -103,11 +105,13 @@ class VideoPlayerWorker(QObject):
         self._target_fps: Optional[float] = self._config.custom_fps
         self._loop: bool = self._config.loop_playback
         self._use_mock_camera: bool = self._config.use_mock_camera
+        self._flip_horizontal: bool = self._config.flip_horizontal
 
         # Virtual camera & frame canvas buffer
         self._custom_vcam_backend: Optional[IVirtualCamera] = vcam_backend
         self._vcam: Optional[IVirtualCamera] = None
         self._canvas_buffer: Optional[np.ndarray] = None
+
 
     # -----------------------------------------------------------------------
     # State Accessors
@@ -236,11 +240,16 @@ class VideoPlayerWorker(QObject):
             ret, frame_bgr = self._cap.read()
             if ret and frame_bgr is not None:
                 transformed = transform_frame(
-                    frame_bgr, target_w, target_h, out_canvas=self._canvas_buffer
+                    frame_bgr,
+                    target_w,
+                    target_h,
+                    out_canvas=self._canvas_buffer,
+                    flip_horizontal=self._flip_horizontal,
                 )
                 self.signals.frame_ready.emit(transformed, 0)
                 # Rewind back to frame 0
                 self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
 
             self._state = PlaybackState.STOPPED
             self.signals.media_loaded.emit(metadata)
@@ -345,7 +354,11 @@ class VideoPlayerWorker(QObject):
             if ret and frame_bgr is not None:
                 target_w, target_h = self._effective_dimensions()
                 transformed = transform_frame(
-                    frame_bgr, target_w, target_h, out_canvas=self._canvas_buffer
+                    frame_bgr,
+                    target_w,
+                    target_h,
+                    out_canvas=self._canvas_buffer,
+                    flip_horizontal=self._flip_horizontal,
                 )
                 self.signals.frame_ready.emit(transformed, target_idx)
 
@@ -372,11 +385,45 @@ class VideoPlayerWorker(QObject):
             )
 
     @Slot(bool)
+    def set_flip_horizontal(self, flip: bool) -> None:
+        """Set horizontal flip (mirror) state dynamically."""
+        with self._lock:
+            self._flip_horizontal = bool(flip)
+            self._config.flip_horizontal = self._flip_horizontal
+
+            # If stopped or paused, re-render current frame immediately with new flip state
+            if (
+                self._cap is not None
+                and self._cap.isOpened()
+                and self._state != PlaybackState.PLAYING
+            ):
+                target_idx = self._current_frame_idx
+                self._cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
+                ret, frame_bgr = self._cap.read()
+                if ret and frame_bgr is not None:
+                    target_w, target_h = self._effective_dimensions()
+                    transformed = transform_frame(
+                        frame_bgr,
+                        target_w,
+                        target_h,
+                        out_canvas=self._canvas_buffer,
+                        flip_horizontal=self._flip_horizontal,
+                    )
+                    self.signals.frame_ready.emit(transformed, target_idx)
+                    if self._vcam is not None and self._vcam.is_active():
+                        try:
+                            self._vcam.send(transformed)
+                        except Exception:
+                            pass
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
+
+    @Slot(bool)
     def set_loop(self, loop: bool) -> None:
         """Set continuous loop playback behavior."""
         with self._lock:
             self._loop = bool(loop)
             self._config.loop_playback = self._loop
+
 
     @Slot(int, int)
     def set_target_resolution(self, width: int, height: int) -> None:
@@ -596,7 +643,9 @@ class VideoPlayerWorker(QObject):
                     target_w,
                     target_h,
                     out_canvas=self._canvas_buffer,
+                    flip_horizontal=self._flip_horizontal,
                 )
+
 
                 # Dispatch frame to virtual camera if active
                 if self._vcam is not None and self._vcam.is_active():
@@ -667,6 +716,7 @@ class VideoPlayerController(QObject):
     _sig_stop = Signal()
     _sig_seek = Signal(int)
     _sig_set_loop = Signal(bool)
+    _sig_set_flip = Signal(bool)
     _sig_set_resolution = Signal(int, int)
     _sig_set_fps = Signal(float)
     _sig_start_vcam = Signal(str, int, int, float)
@@ -694,10 +744,18 @@ class VideoPlayerController(QObject):
         )
         self._worker.moveToThread(self._thread)
 
+        # Audio playback engine
+        self._audio_output = QAudioOutput(self)
+        self._audio_player = QMediaPlayer(self)
+        self._audio_player.setAudioOutput(self._audio_output)
+        self._audio_output.setVolume(self._config.volume / 100.0)
+        self._audio_output.setMuted(not self._config.audio_enabled)
+
         # Forward worker signals to controller signals
         self._worker.signals.frame_ready.connect(self.frame_ready)
         self._worker.signals.position_changed.connect(self.position_changed)
         self._worker.signals.state_changed.connect(self.state_changed)
+        self._worker.signals.state_changed.connect(self._on_worker_state_changed)
         self._worker.signals.vcam_status_changed.connect(self.vcam_status_changed)
         self._worker.signals.error_occurred.connect(self.error_occurred)
         self._worker.signals.media_loaded.connect(self.media_loaded)
@@ -721,6 +779,9 @@ class VideoPlayerController(QObject):
         self._sig_set_loop.connect(
             self._worker.set_loop, Qt.ConnectionType.QueuedConnection
         )
+        self._sig_set_flip.connect(
+            self._worker.set_flip_horizontal, Qt.ConnectionType.QueuedConnection
+        )
         self._sig_set_resolution.connect(
             self._worker.set_target_resolution, Qt.ConnectionType.QueuedConnection
         )
@@ -735,6 +796,18 @@ class VideoPlayerController(QObject):
         )
 
         self._thread.start()
+
+    def _on_worker_state_changed(self, state: PlaybackState) -> None:
+        """Synchronize audio playback engine with video worker state transitions."""
+        if state == PlaybackState.PLAYING:
+            if (
+                self._config.audio_enabled
+                and self._audio_player.playbackState() != QMediaPlayer.PlaybackState.PlayingState
+            ):
+                self._audio_player.play()
+        elif state in (PlaybackState.PAUSED, PlaybackState.STOPPED, PlaybackState.COMPLETED):
+            self._audio_player.pause()
+
 
     # -----------------------------------------------------------------------
     # Public Properties
@@ -798,27 +871,76 @@ class VideoPlayerController(QObject):
             self.state_changed.emit(PlaybackState.UNLOADED)
             return False
 
-        return self._worker.load_video(path_str)
+        success = self._worker.load_video(path_str)
+        if success:
+            try:
+                self._audio_player.setSource(QUrl.fromLocalFile(path_str))
+            except Exception as e:
+                logger.warning(f"Failed to load audio track: {e}")
+        return success
 
     def play(self) -> None:
         """Start or resume video playback."""
         if self.get_state() in (PlaybackState.UNLOADED, PlaybackState.ERROR):
             return
         self._sig_play.emit()
+        if (
+            self._config.audio_enabled
+            and self._audio_player.playbackState() != QMediaPlayer.PlaybackState.PlayingState
+        ):
+            try:
+                self._audio_player.play()
+            except Exception:
+                pass
 
     def pause(self) -> None:
         """Pause video playback."""
         self._worker.request_pause()
         self._worker.pause()
+        try:
+            self._audio_player.pause()
+        except Exception:
+            pass
 
     def stop(self) -> None:
         """Stop video playback and reset position."""
         self._worker.request_stop()
         self._worker.stop()
+        try:
+            self._audio_player.stop()
+            self._audio_player.setPosition(0)
+        except Exception:
+            pass
 
     def seek(self, frame_idx: int) -> None:
         """Seek playback position to the given frame index."""
         self._worker.seek(frame_idx)
+        meta = self.get_metadata()
+        if meta and meta.fps > 0:
+            sec = frame_idx / meta.fps
+            try:
+                self._audio_player.setPosition(int(round(sec * 1000)))
+            except Exception:
+                pass
+
+    def set_flip_horizontal(self, flip: bool) -> None:
+        """Set horizontal flip (mirror) state."""
+        self._config.flip_horizontal = bool(flip)
+        self._sig_set_flip.emit(self._config.flip_horizontal)
+
+    def set_audio_enabled(self, enabled: bool) -> None:
+        """Enable or mute audio streaming."""
+        self._config.audio_enabled = bool(enabled)
+        self._audio_output.setMuted(not self._config.audio_enabled)
+        if not self._config.audio_enabled:
+            self._audio_player.pause()
+        elif self.is_playing():
+            self._audio_player.play()
+
+    def set_volume(self, volume: int) -> None:
+        """Set audio output volume (0-100)."""
+        self._config.volume = max(0, min(100, int(volume)))
+        self._audio_output.setVolume(self._config.volume / 100.0)
 
     def set_loop(self, loop: bool) -> None:
         """Enable or disable loop playback."""
@@ -851,6 +973,10 @@ class VideoPlayerController(QObject):
 
     def cleanup(self) -> None:
         """Safely terminate the worker and its dedicated QThread."""
+        try:
+            self._audio_player.stop()
+        except Exception:
+            pass
         self._worker.cleanup()
         if self._thread.isRunning():
             self._thread.quit()
@@ -862,3 +988,4 @@ class VideoPlayerController(QObject):
             self.cleanup()
         except Exception:
             pass
+
