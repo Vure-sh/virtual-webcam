@@ -419,6 +419,7 @@ class QuickHelpDialog(QDialog):
             "<tr><td><b>S / Esc</b></td><td>Stop playback</td></tr>"
             "<tr><td><b>Ctrl+O</b></td><td>Open video file dialog</td></tr>"
             "<tr><td><b>M</b></td><td>Toggle horizontal flip / mirror video</td></tr>"
+            "<tr><td><b>T</b></td><td>Toggle subtitles overlay on/off</td></tr>"
             "<tr><td><b>L</b></td><td>Toggle loop playback</td></tr>"
             "<tr><td><b>P</b></td><td>Toggle live preview rendering</td></tr>"
             "<tr><td><b>C</b></td><td>Start / Stop Virtual Camera</td></tr>"
@@ -438,10 +439,10 @@ class QuickHelpDialog(QDialog):
         lbl_audio = QLabel(
             "<h3>🎙️ How to Stream Audio to Discord / Calls</h3>"
             "<ol style='line-height: 1.8; font-size: 13px; color: #cbd5e1;'>"
-            "<li><b>Enable Sound:</b> Make sure the <b>🔊 Audio</b> checkbox is checked in the playback bar below.</li>"
-            "<li><b>Create Virtual Mic Sink:</b> Click the <code>🎙️ Setup Virtual Mic</code> button on the right sidebar (or run <code>./setup_virtual_mic.sh</code> in terminal).</li>"
-            "<li><b>Select in Discord:</b> In Discord, go to <b>User Settings (⚙️) → Voice & Video → Input Device (Microphone)</b>.</li>"
-            "<li>Select <b>Virtual_Microphone</b> (or Monitor of Virtual_Microphone). Discord will now stream the video's audio directly into your call!</li>"
+            "<li><b>Enable Sound & Boost Volume:</b> Check the <b>🔊 Sound</b> box. You can boost volume up to <b>200%</b> using the slider!</li>"
+            "<li><b>Create Virtual Mic:</b> Click <code>🎙️ Setup Virtual Mic for Discord</code> on the sidebar (or run <code>./setup_virtual_mic.sh</code>).</li>"
+            "<li><b>Select in Discord:</b> In Discord, go to <b>User Settings (⚙️) → Voice & Video → Input Device (Microphone)</b> and select <b>Virtual_Microphone</b>.</li>"
+            "<li><b>IMPORTANT for Audio Clarity:</b> Under Discord's <i>Voice Processing</i>, turn <b>OFF</b> <code>Noise Suppression (Krisp)</code> and <code>Echo Cancellation</code> so Discord doesn't filter out video sound!</li>"
             "</ol>"
         )
         lbl_audio.setWordWrap(True)
@@ -450,11 +451,29 @@ class QuickHelpDialog(QDialog):
         l_audio.addStretch(1)
         tabs.addTab(tab_audio, "🎙️ Audio Setup")
 
-        # Tab 5: Discord & Troubleshooting
+        # Tab 5: Subtitles
+        tab_subs = QWidget()
+        l_subs = QVBoxLayout(tab_subs)
+        lbl_subs = QLabel(
+            "<h3>💬 Subtitle Support (MKV, MP4, SRT, ASS)</h3>"
+            "<ul style='line-height: 1.8; font-size: 13px; color: #cbd5e1;'>"
+            "<li><b>Embedded MKV Subtitles:</b> When loading an MKV or MP4 video, all subtitle tracks (English, Japanese, etc.) are automatically discovered and loaded!</li>"
+            "<li><b>Track Selector:</b> Choose your preferred subtitle track in the right sidebar dropdown, or turn off with <code>Subtitles Off</code>.</li>"
+            "<li><b>External Subtitles:</b> Click the 📂 button next to Subtitles to load external <code>.srt</code>, <code>.ass</code>, <code>.ssa</code>, or <code>.vtt</code> subtitle files.</li>"
+            "<li><b>Burned into Virtual Stream:</b> Subtitles are rendered directly into the video frames with crisp high-contrast outlines so Discord viewers see them in real time!</li>"
+            "</ul>"
+        )
+        lbl_subs.setWordWrap(True)
+        lbl_subs.setTextFormat(Qt.TextFormat.RichText)
+        l_subs.addWidget(lbl_subs)
+        l_subs.addStretch(1)
+        tabs.addTab(tab_subs, "💬 Subtitles")
+
+        # Tab 6: Discord & Troubleshooting
         tab_discord = QWidget()
         l_discord = QVBoxLayout(tab_discord)
         lbl_discord = QLabel(
-            "<h3>💬 Discord & App Tips</h3>"
+            "<h3>💡 Discord & App Tips</h3>"
             "<ul style='line-height: 1.7; font-size: 13px; color: #cbd5e1;'>"
             "<li><b>Mirrored Video:</b> Toggle the <b>🪞 Flip/Mirror</b> checkbox (or press <kbd>M</kbd>) to flip video horizontally. Note that Discord locally mirrors your own camera preview, but other people in the call see the unmirrored stream.</li>"
             "<li><b>Blurry Video:</b> Set Discord's <b>Video Background</b> to <b>None</b> (Discord's background blur filter blurs non-human video feeds).</li>"
@@ -466,7 +485,8 @@ class QuickHelpDialog(QDialog):
         lbl_discord.setTextFormat(Qt.TextFormat.RichText)
         l_discord.addWidget(lbl_discord)
         l_discord.addStretch(1)
-        tabs.addTab(tab_discord, "💬 Discord Tips")
+        tabs.addTab(tab_discord, "💡 Discord Tips")
+
 
 
         layout.addWidget(tabs, stretch=1)
@@ -825,7 +845,7 @@ class FileSelectorWidget(QWidget):
 
 
 class PlaybackControlWidget(QWidget):
-    """Playback controls: Play/Pause/Stop, scrubbable seek slider, time label, loop, flip, preview, and audio controls."""
+    """Playback controls: Play/Pause/Stop, scrubbable seek slider, time label, loop, flip, preview, subtitles, and audio boost controls."""
 
     play_clicked = Signal()
     pause_clicked = Signal()
@@ -834,6 +854,7 @@ class PlaybackControlWidget(QWidget):
     loop_toggled = Signal(bool)
     preview_toggled = Signal(bool)
     flip_toggled = Signal(bool)
+    subtitles_toggled = Signal(bool)
     audio_toggled = Signal(bool)
     volume_changed = Signal(int)
 
@@ -902,6 +923,12 @@ class PlaybackControlWidget(QWidget):
         self.chk_flip.toggled.connect(self.flip_toggled.emit)
         controls_layout.addWidget(self.chk_flip)
 
+        self.chk_subtitles = QCheckBox("💬 Subs")
+        self.chk_subtitles.setToolTip("Toggle subtitle overlay on video frames (Hotkey: T)")
+        self.chk_subtitles.setChecked(True)
+        self.chk_subtitles.toggled.connect(self.subtitles_toggled.emit)
+        controls_layout.addWidget(self.chk_subtitles)
+
         self.chk_preview = QCheckBox("👁 Preview")
         self.chk_preview.setToolTip("Toggle live video preview (Hotkey: P)")
         self.chk_preview.setChecked(True)
@@ -910,7 +937,7 @@ class PlaybackControlWidget(QWidget):
 
         controls_layout.addSpacing(10)
 
-        # Audio controls
+        # Audio controls (with up to 200% volume boost)
         self.chk_audio = QCheckBox("🔊 Sound")
         self.chk_audio.setToolTip("Enable/Mute audio playback")
         self.chk_audio.setChecked(True)
@@ -918,15 +945,15 @@ class PlaybackControlWidget(QWidget):
         controls_layout.addWidget(self.chk_audio)
 
         self.slider_volume = ClickableSlider(Qt.Orientation.Horizontal)
-        self.slider_volume.setRange(0, 100)
-        self.slider_volume.setValue(100)
-        self.slider_volume.setMaximumWidth(70)
-        self.slider_volume.setToolTip("Volume: 100%")
+        self.slider_volume.setRange(0, 200)
+        self.slider_volume.setValue(150)
+        self.slider_volume.setMaximumWidth(80)
+        self.slider_volume.setToolTip("Volume: 150% (Boosted)")
         self.slider_volume.valueChanged.connect(self._on_volume_slider_changed)
         controls_layout.addWidget(self.slider_volume)
 
-        self.lbl_volume = QLabel("100%")
-        self.lbl_volume.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        self.lbl_volume = QLabel("150%")
+        self.lbl_volume.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: bold;")
         controls_layout.addWidget(self.lbl_volume)
 
         controls_layout.addStretch(1)
@@ -938,9 +965,10 @@ class PlaybackControlWidget(QWidget):
         self.audio_toggled.emit(checked)
 
     def _on_volume_slider_changed(self, val: int) -> None:
-        """Handle volume slider change."""
+        """Handle volume slider change with boost indicator."""
+        boost_suffix = " (Boost)" if val > 100 else ""
         self.lbl_volume.setText(f"{val}%")
-        self.slider_volume.setToolTip(f"Volume: {val}%")
+        self.slider_volume.setToolTip(f"Volume: {val}%{boost_suffix}")
         self.volume_changed.emit(val)
 
     @property
@@ -969,6 +997,11 @@ class PlaybackControlWidget(QWidget):
         return self.chk_flip
 
     @property
+    def subtitles_checkbox(self) -> QCheckBox:
+        """Alias for chk_subtitles."""
+        return self.chk_subtitles
+
+    @property
     def audio_checkbox(self) -> QCheckBox:
         """Alias for chk_audio."""
         return self.chk_audio
@@ -977,6 +1010,7 @@ class PlaybackControlWidget(QWidget):
     def volume_slider(self) -> ClickableSlider:
         """Alias for slider_volume."""
         return self.slider_volume
+
 
     @property
     def timeline_slider(self) -> ClickableSlider:
@@ -1107,7 +1141,7 @@ class PlaybackControlWidget(QWidget):
 
 
 class SettingsWidget(QWidget):
-    """Settings sidebar: Resolution/FPS dropdowns, Virtual Camera controls, status indicators."""
+    """Settings sidebar: Resolution/FPS dropdowns, Virtual Camera controls, Subtitles, status indicators."""
 
     resolution_changed = Signal(object)  # ResolutionPreset
     fps_changed = Signal(object)  # FPSPreset
@@ -1115,6 +1149,8 @@ class SettingsWidget(QWidget):
     device_changed = Signal(str)
     refresh_devices_clicked = Signal()
     setup_virtual_mic_clicked = Signal()
+    subtitle_track_selected = Signal(int)
+    load_subs_clicked = Signal()
     help_clicked = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -1159,6 +1195,29 @@ class SettingsWidget(QWidget):
         stream_layout.addWidget(self.combo_fps, 1, 1)
 
         main_layout.addWidget(grp_stream)
+
+        # Subtitles Configuration Group
+        grp_subs = QGroupBox("Subtitles (MKV / External)")
+        subs_layout = QVBoxLayout(grp_subs)
+        subs_layout.setSpacing(8)
+        subs_layout.setContentsMargins(10, 14, 10, 10)
+
+        sub_row = QHBoxLayout()
+        sub_row.setSpacing(6)
+        self.combo_subtitles = QComboBox()
+        self.combo_subtitles.setToolTip("Select subtitle track (embedded in MKV or external)")
+        self.combo_subtitles.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.combo_subtitles.addItem("Subtitles Off", -1)
+        self.combo_subtitles.currentIndexChanged.connect(self._on_subtitle_changed)
+        sub_row.addWidget(self.combo_subtitles, stretch=1)
+
+        self.btn_load_subs = QPushButton("📂")
+        self.btn_load_subs.setToolTip("Load external subtitle file (.srt, .ass, .vtt)")
+        self.btn_load_subs.setMaximumWidth(36)
+        self.btn_load_subs.clicked.connect(self.load_subs_clicked.emit)
+        sub_row.addWidget(self.btn_load_subs)
+        subs_layout.addLayout(sub_row)
+        main_layout.addWidget(grp_subs)
 
         # Virtual Camera Device Group
         grp_vcam = QGroupBox("Virtual Camera Output")
@@ -1225,6 +1284,31 @@ class SettingsWidget(QWidget):
         main_layout.addWidget(self.btn_help)
 
         main_layout.addStretch(1)
+
+    def _on_subtitle_changed(self, index: int) -> None:
+        """Emit selected subtitle track index."""
+        track_idx = self.combo_subtitles.itemData(index)
+        if track_idx is not None:
+            self.subtitle_track_selected.emit(int(track_idx))
+
+    def set_subtitle_tracks(self, tracks: list, active: Optional[object] = None) -> None:
+        """Update subtitle track dropdown."""
+        self.combo_subtitles.blockSignals(True)
+        self.combo_subtitles.clear()
+        self.combo_subtitles.addItem("Subtitles Off", -1)
+        active_index = 0
+        for i, track in enumerate(tracks):
+            self.combo_subtitles.addItem(track.display_name(), i)
+            if active is not None and (
+                track == active
+                or getattr(track, "stream_index", None) == getattr(active, "stream_index", None)
+            ):
+                active_index = i + 1
+        if tracks and active_index == 0:
+            active_index = 1
+        self.combo_subtitles.setCurrentIndex(active_index)
+        self.combo_subtitles.blockSignals(False)
+
 
 
 
@@ -1464,6 +1548,7 @@ class MainWindow(QMainWindow):
         self.playback_controls.seek_requested.connect(self._controller.seek)
         self.playback_controls.loop_toggled.connect(self._controller.set_loop)
         self.playback_controls.flip_toggled.connect(self._controller.set_flip_horizontal)
+        self.playback_controls.subtitles_toggled.connect(self._controller.set_subtitles_enabled)
         self.playback_controls.audio_toggled.connect(self._controller.set_audio_enabled)
         self.playback_controls.volume_changed.connect(self._controller.set_volume)
         self.playback_controls.preview_toggled.connect(self._on_preview_toggled)
@@ -1471,20 +1556,23 @@ class MainWindow(QMainWindow):
         # Settings -> controller
         self.settings_widget.resolution_changed.connect(self._on_resolution_changed)
         self.settings_widget.fps_changed.connect(self._on_fps_changed)
+        self.settings_widget.subtitle_track_selected.connect(self._controller.select_subtitle_track)
+        self.settings_widget.load_subs_clicked.connect(self._on_load_external_subs)
         self.settings_widget.vcam_toggle_clicked.connect(self._on_vcam_toggle_clicked)
         self.settings_widget.refresh_devices_clicked.connect(self.refresh_devices)
         self.settings_widget.setup_virtual_mic_clicked.connect(self._on_setup_virtual_mic)
         self.settings_widget.help_clicked.connect(self.show_help_dialog)
-
-
 
         # Controller -> UI
         self._controller.frame_ready.connect(self._on_frame_ready)
         self._controller.position_changed.connect(self.playback_controls.set_position)
         self._controller.state_changed.connect(self._on_state_changed)
         self._controller.media_loaded.connect(self._on_media_loaded)
+        self._controller.subtitles_discovered.connect(self._on_subtitles_discovered)
+        self._controller.subtitle_track_changed.connect(self._on_subtitle_track_changed)
         self._controller.vcam_status_changed.connect(self._on_vcam_status_changed)
         self._controller.error_occurred.connect(self.show_error)
+
 
     # -----------------------------------------------------------------------
     # Public Controller Delegation
@@ -1657,31 +1745,86 @@ class MainWindow(QMainWindow):
         """Display a modal critical error dialog."""
         QMessageBox.critical(self, title, message)
 
+    @Slot(list)
+    def _on_subtitles_discovered(self, tracks: list) -> None:
+
+        """Update subtitle track selection in settings sidebar."""
+        active = self._controller.get_active_subtitle_track()
+        self.settings_widget.set_subtitle_tracks(tracks, active=active)
+
+    @Slot(object)
+    def _on_subtitle_track_changed(self, track: Optional[object]) -> None:
+        """Reflect active subtitle track changes in UI."""
+        tracks = self._controller.get_subtitle_tracks()
+        self.settings_widget.set_subtitle_tracks(tracks, active=track)
+
+    @Slot()
+    def _on_load_external_subs(self) -> None:
+        """Open file dialog to browse for external subtitle files."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Subtitle File",
+            "",
+            "Subtitle Files (*.srt *.ass *.ssa *.vtt);;All Files (*)",
+        )
+        if file_path:
+            success = self._controller.load_external_subtitles(file_path)
+            if success:
+                self.status_bar.showMessage(
+                    f"Loaded subtitles: {os.path.basename(file_path)}", 6000
+                )
+            else:
+                self.show_error("SubtitleError", f"Failed to load subtitle file: {file_path}")
+
     @Slot()
     def _on_setup_virtual_mic(self) -> None:
-        """Create virtual microphone audio sink for Discord streaming."""
+        """Create virtual microphone audio sink & source for Discord streaming."""
         import subprocess
 
         try:
-            subprocess.run(
-                [
-                    "pactl",
-                    "load-module",
-                    "module-null-sink",
-                    "sink_name=VirtualMic",
-                    "sink_properties=device.description=Virtual_Microphone",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            # Run setup_virtual_mic.sh if present, otherwise direct pactl commands
+            script_path = Path(__file__).resolve().parent.parent / "setup_virtual_mic.sh"
+            if script_path.is_file():
+                subprocess.run([str(script_path)], capture_output=True, text=True, check=False)
+            else:
+                subprocess.run(
+                    [
+                        "pactl",
+                        "load-module",
+                        "module-null-sink",
+                        "sink_name=VirtualMic",
+                        "sink_properties=device.description=Virtual_Audio_Sink",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                subprocess.run(
+                    [
+                        "pactl",
+                        "load-module",
+                        "module-remap-source",
+                        "master=VirtualMic.monitor",
+                        "source_name=VirtualMic_Source",
+                        "source_properties=device.description=Virtual_Microphone",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                subprocess.run(
+                    ["pactl", "set-sink-volume", "VirtualMic", "150%"],
+                    capture_output=True,
+                    check=False,
+                )
+
             self.status_bar.showMessage(
-                "✓ Virtual Microphone sink ready! In Discord, select 'Virtual_Microphone' as your Input Device.",
-                10000,
+                "✓ Virtual Microphone source active! In Discord: Settings -> Voice & Video -> Input Device -> select 'Virtual_Microphone'.",
+                12000,
             )
             self.show_help_dialog()
         except Exception as e:
-            self.show_error("VirtualMicError", f"Failed to run pactl: {e}")
+            self.show_error("VirtualMicError", f"Failed to setup Virtual Microphone: {e}")
 
     @Slot()
     def show_help_dialog(self) -> None:
@@ -1707,6 +1850,11 @@ class MainWindow(QMainWindow):
             new_val = not self.playback_controls.chk_flip.isChecked()
             self.playback_controls.chk_flip.setChecked(new_val)
             self._controller.set_flip_horizontal(new_val)
+            event.accept()
+        elif key == Qt.Key.Key_T and not (mods & Qt.KeyboardModifier.ControlModifier):
+            new_val = not self.playback_controls.chk_subtitles.isChecked()
+            self.playback_controls.chk_subtitles.setChecked(new_val)
+            self._controller.set_subtitles_enabled(new_val)
             event.accept()
         elif key == Qt.Key.Key_L and not (mods & Qt.KeyboardModifier.ControlModifier):
             new_val = not self.playback_controls.chk_loop.isChecked()
@@ -1744,6 +1892,7 @@ class MainWindow(QMainWindow):
         elif key == Qt.Key.Key_O and (mods & Qt.KeyboardModifier.ControlModifier):
             self.file_selector._on_browse_clicked()
             event.accept()
+
 
         else:
             super().keyPressEvent(event)

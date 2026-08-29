@@ -25,8 +25,8 @@ from PySide6.QtCore import QCoreApplication, QObject, QThread, QUrl, Qt, Signal,
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 from app.config import AppConfig, FPSPreset, ResolutionPreset
+from app.subtitles import SubtitleCue, SubtitleManager, SubtitleTrack
 from app.utils import VideoMetadata, probe_video_metadata, transform_frame
-
 from app.virtual_camera import (
     DeviceBusyError,
     DeviceNotFoundError,
@@ -66,6 +66,9 @@ class PlayerSignals(QObject):
     )  # (is_active: bool, device_name: str, error_message: str)
     error_occurred = Signal(str, str)  # (error_type: str, error_message: str)
     media_loaded = Signal(object)  # (metadata: VideoMetadata)
+    subtitles_discovered = Signal(list)  # (tracks: List[SubtitleTrack])
+    subtitle_track_changed = Signal(object)  # (track: Optional[SubtitleTrack])
+
 
 
 class VideoPlayerWorker(QObject):
@@ -107,10 +110,15 @@ class VideoPlayerWorker(QObject):
         self._use_mock_camera: bool = self._config.use_mock_camera
         self._flip_horizontal: bool = self._config.flip_horizontal
 
+        # Subtitle Engine
+        self._subtitle_manager = SubtitleManager()
+        self._subtitle_manager.set_enabled(self._config.subtitles_enabled)
+
         # Virtual camera & frame canvas buffer
         self._custom_vcam_backend: Optional[IVirtualCamera] = vcam_backend
         self._vcam: Optional[IVirtualCamera] = None
         self._canvas_buffer: Optional[np.ndarray] = None
+
 
 
     # -----------------------------------------------------------------------
@@ -232,6 +240,15 @@ class VideoPlayerWorker(QObject):
             # Update configuration video path
             self._config.video_path = path_str
 
+            # Discover and load subtitle tracks
+            tracks = self._subtitle_manager.discover_tracks(path_str)
+            if tracks and self._config.subtitles_enabled:
+                self._subtitle_manager.load_track(path_str, tracks[0])
+                self.signals.subtitle_track_changed.emit(tracks[0])
+            else:
+                self.signals.subtitle_track_changed.emit(None)
+            self.signals.subtitles_discovered.emit(tracks)
+
             # Allocate or resize canvas buffer
             target_w, target_h = self._effective_dimensions()
             self._canvas_buffer = np.zeros((target_h, target_w, 3), dtype=np.uint8)
@@ -246,10 +263,10 @@ class VideoPlayerWorker(QObject):
                     out_canvas=self._canvas_buffer,
                     flip_horizontal=self._flip_horizontal,
                 )
+                transformed = self._subtitle_manager.render(transformed, 0.0)
                 self.signals.frame_ready.emit(transformed, 0)
                 # Rewind back to frame 0
                 self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
 
             self._state = PlaybackState.STOPPED
             self.signals.media_loaded.emit(metadata)
@@ -261,6 +278,7 @@ class VideoPlayerWorker(QObject):
             self.signals.position_changed.emit(0, self._total_frames, 0.0, total_sec)
             self.signals.state_changed.emit(PlaybackState.STOPPED)
             return True
+
 
     # -----------------------------------------------------------------------
     # Playback Controls
@@ -350,6 +368,9 @@ class VideoPlayerWorker(QObject):
             self._current_frame_idx = target_idx
             self._cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
 
+            cur_sec = (
+                target_idx / self._source_fps if self._source_fps > 0 else 0.0
+            )
             ret, frame_bgr = self._cap.read()
             if ret and frame_bgr is not None:
                 target_w, target_h = self._effective_dimensions()
@@ -360,6 +381,7 @@ class VideoPlayerWorker(QObject):
                     out_canvas=self._canvas_buffer,
                     flip_horizontal=self._flip_horizontal,
                 )
+                transformed = self._subtitle_manager.render(transformed, cur_sec)
                 self.signals.frame_ready.emit(transformed, target_idx)
 
                 if self._vcam is not None and self._vcam.is_active():
@@ -372,9 +394,6 @@ class VideoPlayerWorker(QObject):
                 if self._state != PlaybackState.PLAYING:
                     self._cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
 
-            cur_sec = (
-                target_idx / self._source_fps if self._source_fps > 0 else 0.0
-            )
             total_sec = (
                 self._total_frames / self._source_fps
                 if self._source_fps > 0
@@ -398,6 +417,7 @@ class VideoPlayerWorker(QObject):
                 and self._state != PlaybackState.PLAYING
             ):
                 target_idx = self._current_frame_idx
+                cur_sec = target_idx / self._source_fps if self._source_fps > 0 else 0.0
                 self._cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
                 ret, frame_bgr = self._cap.read()
                 if ret and frame_bgr is not None:
@@ -409,6 +429,7 @@ class VideoPlayerWorker(QObject):
                         out_canvas=self._canvas_buffer,
                         flip_horizontal=self._flip_horizontal,
                     )
+                    transformed = self._subtitle_manager.render(transformed, cur_sec)
                     self.signals.frame_ready.emit(transformed, target_idx)
                     if self._vcam is not None and self._vcam.is_active():
                         try:
@@ -416,6 +437,67 @@ class VideoPlayerWorker(QObject):
                         except Exception:
                             pass
                     self._cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
+
+    @Slot(bool)
+    def set_subtitles_enabled(self, enabled: bool) -> None:
+        """Enable or disable subtitle overlay rendering."""
+        with self._lock:
+            self._config.subtitles_enabled = bool(enabled)
+            self._subtitle_manager.set_enabled(self._config.subtitles_enabled)
+            if (
+                self._cap is not None
+                and self._cap.isOpened()
+                and self._state != PlaybackState.PLAYING
+            ):
+                self.seek(self._current_frame_idx)
+
+    @Slot(int)
+    def select_subtitle_track(self, track_index: int) -> None:
+        """Select active subtitle track by index (-1 for off)."""
+        with self._lock:
+            tracks = self._subtitle_manager.get_tracks()
+            if 0 <= track_index < len(tracks) and self._video_path:
+                selected_track = tracks[track_index]
+                self._subtitle_manager.load_track(self._video_path, selected_track)
+                self.signals.subtitle_track_changed.emit(selected_track)
+            elif track_index == -1:
+                self._subtitle_manager._active_track = None
+                self._subtitle_manager._cues.clear()
+                self.signals.subtitle_track_changed.emit(None)
+            if (
+                self._cap is not None
+                and self._cap.isOpened()
+                and self._state != PlaybackState.PLAYING
+            ):
+                self.seek(self._current_frame_idx)
+
+    @Slot(str)
+    def load_external_subtitles(self, file_path: str) -> bool:
+        """Load external subtitle file (.srt, .ass, etc.)."""
+        with self._lock:
+            success = self._subtitle_manager.load_external_file(file_path)
+            if success:
+                tracks = self._subtitle_manager.get_tracks()
+                self.signals.subtitles_discovered.emit(tracks)
+                self.signals.subtitle_track_changed.emit(self._subtitle_manager.get_active_track())
+                if (
+                    self._cap is not None
+                    and self._cap.isOpened()
+                    and self._state != PlaybackState.PLAYING
+                ):
+                    self.seek(self._current_frame_idx)
+            return success
+
+    def get_subtitle_tracks(self) -> List[SubtitleTrack]:
+        """Return list of discovered subtitle tracks."""
+        with self._lock:
+            return self._subtitle_manager.get_tracks()
+
+    def get_active_subtitle_track(self) -> Optional[SubtitleTrack]:
+        """Return currently active subtitle track."""
+        with self._lock:
+            return self._subtitle_manager.get_active_track()
+
 
     @Slot(bool)
     def set_loop(self, loop: bool) -> None:
@@ -638,6 +720,9 @@ class VideoPlayerWorker(QObject):
                         (target_h, target_w, 3), dtype=np.uint8
                     )
 
+                cur_sec = (
+                    cur_idx / self._source_fps if self._source_fps > 0 else 0.0
+                )
                 transformed = transform_frame(
                     frame_bgr,
                     target_w,
@@ -645,7 +730,7 @@ class VideoPlayerWorker(QObject):
                     out_canvas=self._canvas_buffer,
                     flip_horizontal=self._flip_horizontal,
                 )
-
+                transformed = self._subtitle_manager.render(transformed, cur_sec)
 
                 # Dispatch frame to virtual camera if active
                 if self._vcam is not None and self._vcam.is_active():
@@ -658,6 +743,7 @@ class VideoPlayerWorker(QObject):
 
             # Emit frame and progress signals outside lock
             self.signals.frame_ready.emit(transformed, cur_idx)
+
             cur_sec = (
                 cur_idx / self._source_fps if self._source_fps > 0 else 0.0
             )
@@ -708,6 +794,8 @@ class VideoPlayerController(QObject):
     vcam_status_changed = Signal(bool, str, str)
     error_occurred = Signal(str, str)
     media_loaded = Signal(object)
+    subtitles_discovered = Signal(list)
+    subtitle_track_changed = Signal(object)
 
     # Internal signals for invoking worker slots across threads
     _sig_load_video = Signal(str)
@@ -717,6 +805,9 @@ class VideoPlayerController(QObject):
     _sig_seek = Signal(int)
     _sig_set_loop = Signal(bool)
     _sig_set_flip = Signal(bool)
+    _sig_set_subtitles = Signal(bool)
+    _sig_select_subtitle_track = Signal(int)
+    _sig_load_external_subtitles = Signal(str)
     _sig_set_resolution = Signal(int, int)
     _sig_set_fps = Signal(float)
     _sig_start_vcam = Signal(str, int, int, float)
@@ -748,7 +839,7 @@ class VideoPlayerController(QObject):
         self._audio_output = QAudioOutput(self)
         self._audio_player = QMediaPlayer(self)
         self._audio_player.setAudioOutput(self._audio_output)
-        self._audio_output.setVolume(self._config.volume / 100.0)
+        self._audio_output.setVolume(min(1.0, self._config.volume / 100.0))
         self._audio_output.setMuted(not self._config.audio_enabled)
 
         # Forward worker signals to controller signals
@@ -759,6 +850,8 @@ class VideoPlayerController(QObject):
         self._worker.signals.vcam_status_changed.connect(self.vcam_status_changed)
         self._worker.signals.error_occurred.connect(self.error_occurred)
         self._worker.signals.media_loaded.connect(self.media_loaded)
+        self._worker.signals.subtitles_discovered.connect(self.subtitles_discovered)
+        self._worker.signals.subtitle_track_changed.connect(self.subtitle_track_changed)
 
         # Connect internal cross-thread signals to worker slots
         self._sig_load_video.connect(
@@ -782,6 +875,15 @@ class VideoPlayerController(QObject):
         self._sig_set_flip.connect(
             self._worker.set_flip_horizontal, Qt.ConnectionType.QueuedConnection
         )
+        self._sig_set_subtitles.connect(
+            self._worker.set_subtitles_enabled, Qt.ConnectionType.QueuedConnection
+        )
+        self._sig_select_subtitle_track.connect(
+            self._worker.select_subtitle_track, Qt.ConnectionType.QueuedConnection
+        )
+        self._sig_load_external_subtitles.connect(
+            self._worker.load_external_subtitles, Qt.ConnectionType.QueuedConnection
+        )
         self._sig_set_resolution.connect(
             self._worker.set_target_resolution, Qt.ConnectionType.QueuedConnection
         )
@@ -796,6 +898,7 @@ class VideoPlayerController(QObject):
         )
 
         self._thread.start()
+
 
     def _on_worker_state_changed(self, state: PlaybackState) -> None:
         """Synchronize audio playback engine with video worker state transitions."""
@@ -938,9 +1041,43 @@ class VideoPlayerController(QObject):
             self._audio_player.play()
 
     def set_volume(self, volume: int) -> None:
-        """Set audio output volume (0-100)."""
-        self._config.volume = max(0, min(100, int(volume)))
-        self._audio_output.setVolume(self._config.volume / 100.0)
+        """Set audio output volume (0-200, allowing amplification boost)."""
+        import subprocess
+
+        self._config.volume = max(0, min(200, int(volume)))
+        self._audio_output.setVolume(min(1.0, self._config.volume / 100.0))
+
+        # Dynamically adjust VirtualMic sink volume for extra amplification if sink exists
+        try:
+            subprocess.run(
+                ["pactl", "set-sink-volume", "VirtualMic", f"{self._config.volume}%"],
+                capture_output=True,
+                check=False,
+            )
+        except Exception:
+            pass
+
+    def set_subtitles_enabled(self, enabled: bool) -> None:
+        """Enable or disable subtitle overlay."""
+        self._config.subtitles_enabled = bool(enabled)
+        self._sig_set_subtitles.emit(self._config.subtitles_enabled)
+
+    def select_subtitle_track(self, track_index: int) -> None:
+        """Select active subtitle track index (-1 for none)."""
+        self._sig_select_subtitle_track.emit(int(track_index))
+
+    def load_external_subtitles(self, file_path: str) -> bool:
+        """Load an external subtitle file."""
+        return self._worker.load_external_subtitles(file_path)
+
+    def get_subtitle_tracks(self) -> List[SubtitleTrack]:
+        """Return list of discovered subtitle tracks."""
+        return self._worker.get_subtitle_tracks()
+
+    def get_active_subtitle_track(self) -> Optional[SubtitleTrack]:
+        """Return currently active subtitle track."""
+        return self._worker.get_active_subtitle_track()
+
 
     def set_loop(self, loop: bool) -> None:
         """Enable or disable loop playback."""

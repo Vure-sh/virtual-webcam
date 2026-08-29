@@ -119,6 +119,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=False,
         help="Mute/disable audio playback on startup.",
     )
+    parser.add_argument(
+        "--no-subs",
+        "--no-subtitles",
+        dest="no_subs",
+        action="store_true",
+        default=False,
+        help="Disable subtitle rendering on startup.",
+    )
+    parser.add_argument(
+        "--sub-file",
+        "--subtitle-file",
+        dest="sub_file",
+        type=str,
+        default=None,
+        help="Path to external subtitle file (.srt, .ass, .vtt) to load on startup.",
+    )
 
     return parser
 
@@ -145,9 +161,11 @@ def parse_args_to_config(argv: Optional[List[str]] = None) -> Tuple[AppConfig, a
         live_preview_enabled=True,
         flip_horizontal=bool(getattr(args, "mirror", False)),
         audio_enabled=not bool(getattr(args, "no_audio", False)),
+        subtitles_enabled=not bool(getattr(args, "no_subs", False)),
     )
 
     return config, args
+
 
 
 

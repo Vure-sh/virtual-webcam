@@ -162,7 +162,9 @@ class AppConfig:
     live_preview_enabled: bool = True
     flip_horizontal: bool = False
     audio_enabled: bool = True
-    volume: int = 100
+    volume: int = 150
+    subtitles_enabled: bool = True
+
 
     def __post_init__(self) -> None:
         """Coerce and validate fields upon initialization."""
