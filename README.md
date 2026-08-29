@@ -4,6 +4,11 @@ A lightweight Linux desktop app that plays any local video file directly into an
 
 Built with Python, PySide6, OpenCV, and `v4l2loopback`.
 
+Showcase:
+
+<img width="1920" height="1080" alt="showcasee" src="https://github.com/user-attachments/assets/e43ee1f9-2983-4cfd-8adb-f1ab80c1644f" />
+
+
 ---
 
 ## Features
